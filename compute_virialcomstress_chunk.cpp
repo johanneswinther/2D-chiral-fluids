@@ -153,6 +153,8 @@ void ComputeVirialcomstressChunk::compute_array()
 {
   ComputeChunk::compute_array();
   size_array_rows = nchunk;
+
+  //invoked_vector = update->ntimestep;
     
   Pair *pair = force->pair;
   double **cutsq = pair->cutsq;  // Get cutoff distance squared
@@ -217,13 +219,16 @@ void ComputeVirialcomstressChunk::compute_array()
     xcm_all[i][1]=0.0;
     xcm_all[i][2]=0.0;
   }
-
-  // Compute mass for each chunk on this processor
+  
+  // zero local per-chunk values
   if (massneed)
     for (int i = 0; i < nchunk; i++) massproc[i] = 0.0;
-  
-  // Compute XCM for each chunk on this processor
-  for (int i = 0; i < nlocal; i++) {
+
+  // compute COM for each chunk and do this by unwrapping the coordinates
+  imageint *image = atom->image;
+  double unwrap[3];
+
+  for (int i = 0; i < nlocal; i++)
     if (mask[i] & groupbit) {
       index = ichunk[i] - 1;
       if (index < 0) continue;
@@ -231,24 +236,21 @@ void ComputeVirialcomstressChunk::compute_array()
         massone = rmass[i];
       else
         massone = mass[type[i]];
-      xcm[index][0] += x[i][0] * massone;
-      xcm[index][1] += x[i][1] * massone;
-      xcm[index][2] += x[i][2] * massone;
+      domain->unmap(x[i], image[i], unwrap);
+      xcm[index][0] += unwrap[0] * massone;
+      xcm[index][1] += unwrap[1] * massone;
+      xcm[index][2] += unwrap[2] * massone;
       if (massneed) massproc[index] += massone;
     }
-  }
-  //This piece of code above is adapted from "compute_vcm_chunk.cpp"
-  //Sum mass over all processors
-  MPI_Allreduce(&xcm[0][0],
-    &xcm_all[0][0],
-    nchunk * 3, MPI_DOUBLE, MPI_SUM, world);
+
+  MPI_Allreduce(&xcm[0][0], &xcm_all[0][0], 3 * nchunk, MPI_DOUBLE, MPI_SUM, world);
   if (massneed) MPI_Allreduce(massproc, masstotal, nchunk, MPI_DOUBLE, MPI_SUM, world);
 
   double Lx = domain->boxhi[0] - domain->boxlo[0];
   double Ly = domain->boxhi[1] - domain->boxlo[1];
   double Lz = domain->boxhi[2] - domain->boxlo[2];
 
-  // 2D or 3D
+    // // 2D or 3D
   nktv2p = force->nktv2p;
   if (domain->dimension == 2){
     inv_volume = 1.0 / (Lx*Ly);
@@ -256,10 +258,11 @@ void ComputeVirialcomstressChunk::compute_array()
     inv_volume = 1.0 / (Lx*Ly*Lz);
   }
 
-  scale=0.5*nktv2p*inv_volume; 
+  scale=0.5*nktv2p*inv_volume;
 
   // Get forces for each atom on the processor and bin them into their corresponding intermolecular interactions
   for (ii = 0; ii < inum; ii++) {
+
     i = ilist[ii];
     xtmp = x[i][0];
     ytmp = x[i][1];
@@ -272,6 +275,16 @@ void ComputeVirialcomstressChunk::compute_array()
     // Check if atom i is in the group
     if (!(mask[i] & groupbit)) continue;
 
+    // Molecule index (is shared between processors when using atom style "full")
+    int i_index;
+    i_index= atom->molecule[i] - 1;
+    double com_i[3];
+
+    //Get COM for molecule i
+    for (int d = 0; d < 3; ++d) {
+      com_i[d] = xcm_all[i_index][d] / masstotal[i_index];
+    }
+
     for (jj = 0; jj < jnum; jj++) {
 
       j = jlist[jj];
@@ -282,9 +295,7 @@ void ComputeVirialcomstressChunk::compute_array()
       if (!(mask[j] & groupbit)) continue;
 
       // Molecule index (is shared between processors when using atom style "full")
-      int i_index;
       int j_index;
-      i_index= atom->molecule[i] - 1;
       j_index= atom->molecule[j] - 1;
 
       if (i_index == j_index) continue;
@@ -301,56 +312,48 @@ void ComputeVirialcomstressChunk::compute_array()
       if (rsq < cutsq[itype][jtype]) {
         eng = force->pair->single(i, j, itype, jtype, rsq, factor_coul, factor_lj, fpair);
 
-        //Use minimum image convention for the intermolecular distance
         if (masstotal[i_index] > 0.0) {
-          double x1 = xcm_all[i_index][0] / masstotal[i_index];
-          double x2 = xcm_all[j_index][0] / masstotal[j_index];
-          double dx = x1 - x2;
-          if (domain->xperiodic) {
-            if (dx > 0.5 * Lx) dx -= Lx;
-            if (dx < -0.5 * Lx) dx += Lx;
-          }
-          double y1 = xcm_all[i_index][1] / masstotal[i_index];
-          double y2 = xcm_all[j_index][1] / masstotal[j_index];
-          double dy = y1 - y2;
-          if (domain->yperiodic) {
-            if (dy > 0.5 * Ly) dy -= Ly;
-            if (dy < -0.5 * Ly) dy += Ly;
-          }
-          double z1 = xcm_all[i_index][2] / masstotal[i_index];
-          double z2 = xcm_all[j_index][2] / masstotal[j_index];
-          double dz = z1 - z2;
-          if (domain->zperiodic) {
-            if (dz > 0.5 * Lz) dz -= Lz;
-            if (dz < -0.5 * Lz) dz += Lz;
-          }
-        
-          //Reminder: delx * fpair is the interatomic force and dx is the intermolecular distance
-          stress[i_index][0] += delx * fpair*dx*scale; //Txx
-          stress[i_index][1] += delx * fpair*dy*scale; //Txy
-          stress[i_index][2] += delx * fpair*dz*scale; //Txz
-          stress[i_index][3] += dely * fpair*dx*scale; //Tyx
-          stress[i_index][4] += dely * fpair*dy*scale; //Tyy
-          stress[i_index][5] += dely * fpair*dz*scale; //Tyz
-          stress[i_index][6] += delz * fpair*dx*scale; //Tzx
-          stress[i_index][7] += delz * fpair*dy*scale; //Tzy
-          stress[i_index][8] += delz * fpair*dz*scale; //Tzz
+          
+          double com_j[3], delcom[3];
 
-          // following line is for the newton pair
-          if (newton_pair) {
-            stress[j_index][0] += delx * fpair*dx*scale; //Txx
-            stress[j_index][1] += delx * fpair*dy*scale; //Txy
-            stress[j_index][2] += delx * fpair*dz*scale; //Txz
-            stress[j_index][3] += dely * fpair*dx*scale; //Tyx
-            stress[j_index][4] += dely * fpair*dy*scale; //Tyy
-            stress[j_index][5] += dely * fpair*dz*scale; //Tyz
-            stress[j_index][6] += delz * fpair*dx*scale; //Tzx
-            stress[j_index][7] += delz * fpair*dy*scale; //Tzy
-            stress[j_index][8] += delz * fpair*dz*scale; //Tzz
+          // Get COM for molecule j
+          for (int d = 0; d < 3; ++d) {
+            com_j[d] = xcm_all[j_index][d] / masstotal[j_index];
+          }
+
+          // Get the intermolecular distance
+          for (int d = 0; d < 3; ++d) {
+            delcom[d] = com_i[d] - com_j[d];
+          }
+
+          //Rewrap the vector, so there are no discontinuities when molecules cross boundaries
+          domain->remap(delcom);
+
+          //Reminder: delx * fpair is the interatomic force and dx is the intermolecular distance
+          stress[i_index][0] += delx*fpair*delcom[0]*scale; //Txx
+          stress[i_index][1] += delx*fpair*delcom[1]*scale; //Txy
+          stress[i_index][2] += delx*fpair*delcom[2]*scale; //Txz
+          stress[i_index][3] += dely*fpair*delcom[0]*scale; //Tyx
+          stress[i_index][4] += dely*fpair*delcom[1]*scale; //Tyy
+          stress[i_index][5] += dely*fpair*delcom[2]*scale; //Tyz
+          stress[i_index][6] += delz*fpair*delcom[0]*scale; //Tzx
+          stress[i_index][7] += delz*fpair*delcom[1]*scale; //Tzy
+          stress[i_index][8] += delz*fpair*delcom[2]*scale; //Tzz
+
+          if (newton_pair || j < nlocal) {
+            stress[j_index][0] += delx*fpair*delcom[0]*scale; //Txx
+            stress[j_index][1] += delx*fpair*delcom[1]*scale; //Txy
+            stress[j_index][2] += delx*fpair*delcom[2]*scale; //Txz
+            stress[j_index][3] += dely*fpair*delcom[0]*scale; //Tyx
+            stress[j_index][4] += dely*fpair*delcom[1]*scale; //Tyy
+            stress[j_index][5] += dely*fpair*delcom[2]*scale; //Tyz
+            stress[j_index][6] += delz*fpair*delcom[0]*scale; //Tzx
+            stress[j_index][7] += delz*fpair*delcom[1]*scale; //Tzy
+            stress[j_index][8] += delz*fpair*delcom[2]*scale; //Tzz
           }
         } else {
           stress[i_index][0] = stress[i_index][1] = stress[i_index][2] = stress[i_index][3] = stress[i_index][4] = stress[i_index][5] = stress[i_index][6] = stress[i_index][7] = stress[i_index][8] = 0.0;
-          if (newton_pair) {
+          if (newton_pair || j < nlocal) {
             stress[j_index][0] = stress[j_index][1] = stress[j_index][2] = stress[j_index][3] = stress[j_index][4] = stress[j_index][5] = stress[j_index][6] = stress[j_index][7] = stress[j_index][8] = 0.0;
           }
         }
