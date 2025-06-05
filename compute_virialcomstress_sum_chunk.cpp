@@ -331,9 +331,7 @@ void ComputeVirialcomstressSumChunk::compute_vector()
   }
 
   //Gather all of the stress data
-  MPI_Allreduce(&stress[0],
-    &stress_all[0],
-    9, MPI_DOUBLE, MPI_SUM, world);
+  MPI_Allreduce(stress, stress_all, 9, MPI_DOUBLE, MPI_SUM, world);
 
   for (int i = 0; i < 9; i++) {
     stress_all[i] = scale * stress_all[i];

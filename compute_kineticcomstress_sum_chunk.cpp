@@ -124,7 +124,7 @@ void ComputeKineticcomstressSumChunk::compute_vector()
   int *ichunk = cchunk->ichunk;
 
   for (int i=0; i<9; i++) {
-    stress[i] = 0.0;
+    // stress[i] = 0.0;
     stress_all[i]=0.0;
   }
 
@@ -136,7 +136,6 @@ void ComputeKineticcomstressSumChunk::compute_vector()
     vcmall[i][1] = 0.0;
     vcmall[i][2] = 0.0;
   }
-
   double **v = atom->v;
   int *mask = atom->mask;
   int *type = atom->type;
@@ -166,9 +165,11 @@ void ComputeKineticcomstressSumChunk::compute_vector()
         massone = rmass[i];
       else
         massone = mass[type[i]];
+      // temperature->remove_bias(i, v[i]); //remove macroscopic velocity bias
       vcm[index][0] += v[i][0] * massone;
       vcm[index][1] += v[i][1] * massone;
       vcm[index][2] += v[i][2] * massone;
+      // temperature->restore_bias(i, v[i]); //restore macroscopic velocity bias
       if (massneed) massproc[index] += massone;
     }
   //This piece of code above is adapted from "compute_vcm_chunk.cpp"
@@ -201,28 +202,28 @@ void ComputeKineticcomstressSumChunk::compute_vector()
   }
 
   for (int i = 0; i < nchunk; i++) {
-    if (masstotal[i] > 0.0) {
-      stress[0] += masstotal[i]*vcmall[i][0]*vcmall[i][0]; // T_xx
-      stress[1] += masstotal[i]*vcmall[i][0]*vcmall[i][1]; // T_xy
-      stress[2] += masstotal[i]*vcmall[i][0]*vcmall[i][2]; // T_xz
-      stress[3] += masstotal[i]*vcmall[i][1]*vcmall[i][0]; // T_yx
-      stress[4] += masstotal[i]*vcmall[i][1]*vcmall[i][1]; // T_yy 
-      stress[5] += masstotal[i]*vcmall[i][1]*vcmall[i][2]; // T_yz
-      stress[6] += masstotal[i]*vcmall[i][2]*vcmall[i][0]; // T_zx
-      stress[7] += masstotal[i]*vcmall[i][2]*vcmall[i][1]; // T_zy 
-      stress[8] += masstotal[i]*vcmall[i][2]*vcmall[i][2]; // T_zz
-    }
+      stress_all[0] += masstotal[i]*vcmall[i][0]*vcmall[i][0]; // T_xx
+      stress_all[1] += masstotal[i]*vcmall[i][0]*vcmall[i][1]; // T_xy
+      stress_all[2] += masstotal[i]*vcmall[i][0]*vcmall[i][2]; // T_xz
+      stress_all[3] += masstotal[i]*vcmall[i][1]*vcmall[i][0]; // T_yx
+      stress_all[4] += masstotal[i]*vcmall[i][1]*vcmall[i][1]; // T_yy
+      stress_all[5] += masstotal[i]*vcmall[i][1]*vcmall[i][2]; // T_yz
+      stress_all[6] += masstotal[i]*vcmall[i][2]*vcmall[i][0]; // T_zx
+      stress_all[7] += masstotal[i]*vcmall[i][2]*vcmall[i][1]; // T_zy 
+      stress_all[8] += masstotal[i]*vcmall[i][2]*vcmall[i][2]; // T_zz
   }
-
-  MPI_Allreduce(&stress[0],&stress_all[0],9, MPI_DOUBLE, MPI_SUM, world);
 
   for (int i=0; i<9; i++) {
     stress_all[i] *= inv_volume; // Normalize by volume
-  }
+  } 
+
+  // stress_all[3]= stress_all[1]; // T_yx
+  // stress_all[6]= stress_all[2]; // T_zx
+  // stress_all[7]= stress_all[5]; // T_zy
 }
 
 double ComputeKineticcomstressSumChunk::memory_usage()
 {
-  double bytes = sizeof(double)*(9*2+maxchunk*2+2*3*maxchunk);
+  double bytes = (double) (9*2+maxchunk*2+maxchunk*2*3)* sizeof(double);
   return bytes;
 }

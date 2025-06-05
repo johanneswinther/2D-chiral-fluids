@@ -20,7 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
-#include "compute_kineticcomstress_chunk.h"
+#include "compute_translationaltemp_sum_chunk.h"
 #include "neighbor.h"
 #include "atom.h"
 #include "update.h"
@@ -47,28 +47,27 @@ grained stress tensor for a 2D/3D system of molecules.
 
 ---------------------------------------------------------------------- */
 
-ComputeKineticcomstressChunk::ComputeKineticcomstressChunk(LAMMPS *lmp, int narg, char **arg) :
+ComputeTranslationaltempSumChunk::ComputeTranslationaltempSumChunk(LAMMPS *lmp, int narg, char **arg) :
   ComputeChunk(lmp, narg, arg),
-  id_temp(NULL), stress(nullptr), massproc(nullptr), masstotal(nullptr), vcm(nullptr), vcmall(nullptr)
+  id_temp(NULL), stress(nullptr),stress_all(nullptr), massproc(nullptr), masstotal(nullptr), vcm(nullptr), vcmall(nullptr)
 {
-  if (narg < 4) error->all(FLERR,"Illegal compute kineticcomstress/chunk command");
+  if (narg < 4) error->all(FLERR,"Illegal compute velsq/chunk command");
 
-  array_flag = 1;
-  size_array_cols = 9;
-  size_array_rows = 0;
-  size_array_rows_variable = 1;
-  extarray = 0;
+  vector_flag = 1;
+  extvector = 0;
+  size_vector = 3;
 
-  ComputeKineticcomstressChunk::init();
-  ComputeKineticcomstressChunk::allocate();
+  ComputeTranslationaltempSumChunk::init();
+  ComputeTranslationaltempSumChunk::allocate();
 }
 
 /* ---------------------------------------------------------------------- */
 
-ComputeKineticcomstressChunk::~ComputeKineticcomstressChunk()
+ComputeTranslationaltempSumChunk::~ComputeTranslationaltempSumChunk()
 {
   delete [] id_temp;
   memory->destroy(stress);
+  memory->destroy(stress_all);
   memory->destroy(massproc);
   memory->destroy(masstotal);
   memory->destroy(vcm);
@@ -77,61 +76,59 @@ ComputeKineticcomstressChunk::~ComputeKineticcomstressChunk()
 
 /* ---------------------------------------------------------------------- */
 
-void ComputeKineticcomstressChunk::allocate()
+void ComputeTranslationaltempSumChunk::allocate()
 {
   ComputeChunk::allocate();
 
   memory->destroy(stress);
+  memory->destroy(stress_all);
   memory->destroy(massproc);
   memory->destroy(masstotal);
   memory->destroy(vcm);
   memory->destroy(vcmall);
 
   maxchunk = nchunk;
-  if (maxchunk == 0) error->all(FLERR, "No chunks found for kineticcomstress/chunk");
+  if (maxchunk == 0) error->all(FLERR, "No chunks found for velsq/chunk");
 
-  memory->create(stress,maxchunk,9,"kineticcomstress/chunk:stress");
-  memory->create(massproc, maxchunk, "kineticcomstress/chunk:massproc");
-  memory->create(masstotal, maxchunk, "kineticcomstress/chunk:masstotal");
-  memory->create(vcm, maxchunk, 3, "kineticcomstress/chunk:vcm");
-  memory->create(vcmall, maxchunk, 3, "kineticcomstress/chunk:vcmall");
-  array=stress;
+  memory->create(stress,9,"velsq/chunk:stress");
+  memory->create(stress_all,9,"velsq/chunk:stress_all");
+  memory->create(massproc, maxchunk, "velsq/chunk:massproc");
+  memory->create(masstotal, maxchunk, "velsq/chunk:masstotal");
+  memory->create(vcm, maxchunk, 3, "velsq/chunk:vcm");
+  memory->create(vcmall, maxchunk, 3, "velsq/chunk:vcmall");
+  vector=stress_all;
 }
 
 
 /* ---------------------------------------------------------------------- */
 
-void ComputeKineticcomstressChunk::setup()
+void ComputeTranslationaltempSumChunk::setup()
 {
   // one-time calculation of per-chunk mass
   // done in setup, so that ComputeChunkAtom::setup() is already called
 
   if (firstflag && cchunk->idsflag == ONCE) {
-    compute_array();
+    compute_vector();
     firstflag = massneed = 0;
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-void ComputeKineticcomstressChunk::compute_array()
+void ComputeTranslationaltempSumChunk::compute_vector()
 {
   int index;
   double massone;
 
-  ComputeChunk::compute_array();
+  ComputeChunk::compute_vector();
   int *ichunk = cchunk->ichunk;
 
+  for (int i=0; i<3; i++) {
+    stress[i] = 0.0;
+    stress_all[i]=0.0;
+  }
+
   for (int i = 0; i < nchunk; i++) {
-    stress[i][0]=0.0;
-    stress[i][1]=0.0;
-    stress[i][2]=0.0;
-    stress[i][3]=0.0;
-    stress[i][4]=0.0;
-    stress[i][5]=0.0;
-    stress[i][6]=0.0;
-    stress[i][7]=0.0;
-    stress[i][8]=0.0;
     vcm[i][0] = 0.0;
     vcm[i][1] = 0.0;
     vcm[i][2] = 0.0;
@@ -139,7 +136,6 @@ void ComputeKineticcomstressChunk::compute_array()
     vcmall[i][1] = 0.0;
     vcmall[i][2] = 0.0;
   }
-
   double **v = atom->v;
   int *mask = atom->mask;
   int *type = atom->type;
@@ -183,16 +179,6 @@ void ComputeKineticcomstressChunk::compute_array()
   MPI_Allreduce(&vcm[0][0], &vcmall[0][0], 3 * nchunk, MPI_DOUBLE, MPI_SUM, world);
   if (massneed) MPI_Allreduce(massproc, masstotal, nchunk, MPI_DOUBLE, MPI_SUM, world);
 
-  // Normalize VCM by mass
-  for (int i = 0; i < nchunk; i++) {
-    if (masstotal[i] > 0.0) {
-      vcmall[i][0] /= masstotal[i];
-      vcmall[i][1] /= masstotal[i];
-      vcmall[i][2] /= masstotal[i];
-
-    } else
-      vcmall[i][0] = vcmall[i][1] = vcmall[i][2] = 0.0;
-  }
 
   double Lx = domain->boxhi[0] - domain->boxlo[0];
   double Ly = domain->boxhi[1] - domain->boxlo[1];
@@ -205,25 +191,24 @@ void ComputeKineticcomstressChunk::compute_array()
     inv_volume = 1.0 / (Lx*Ly*Lz);
   }
 
+  // Compute scale factor
+  scale = 1.0/(nchunk*nchunk*inv_volume);
+
   for (int i = 0; i < nchunk; i++) {
     if (masstotal[i] > 0.0) {
-      stress[i][0] += masstotal[i]*vcmall[i][0]*vcmall[i][0]*inv_volume; // T_xx
-      stress[i][1] += masstotal[i]*vcmall[i][0]*vcmall[i][1]*inv_volume; // T_xy
-      stress[i][2] += masstotal[i]*vcmall[i][0]*vcmall[i][2]*inv_volume; // T_xz
-      stress[i][3] += masstotal[i]*vcmall[i][1]*vcmall[i][0]*inv_volume; // T_yx
-      stress[i][4] += masstotal[i]*vcmall[i][1]*vcmall[i][1]*inv_volume; // T_yy 
-      stress[i][5] += masstotal[i]*vcmall[i][1]*vcmall[i][2]*inv_volume; // T_yz
-      stress[i][6] += masstotal[i]*vcmall[i][2]*vcmall[i][0]*inv_volume; // T_zx
-      stress[i][7] += masstotal[i]*vcmall[i][2]*vcmall[i][1]*inv_volume; // T_zy 
-      stress[i][8] += masstotal[i]*vcmall[i][2]*vcmall[i][2]*inv_volume; // T_zz
-    } else
-      stress[i][0] = stress[i][1] = stress[i][2] = stress[i][3] = stress[i][4] = stress[i][5] = stress[i][6] = stress[i][7] = stress[i][8]= 0.0;
+        stress_all[0] += vcmall[i][0]*vcmall[i][0]/(masstotal[i]*masstotal[i]); // T_xx
+        stress_all[1] += vcmall[i][1]*vcmall[i][1]/(masstotal[i]*masstotal[i]); // T_xy
+        stress_all[2] += vcmall[i][2]*vcmall[i][2]/(masstotal[i]*masstotal[i]); // T_xz
+    }
   }
-  size_array_rows = nchunk;
+
+  for (int i=0; i<3; i++) {
+    stress_all[i] *= scale; // Normalize by volume
+  }
 }
 
-double ComputeKineticcomstressChunk::memory_usage()
+double ComputeTranslationaltempSumChunk::memory_usage()
 {
-  double bytes = sizeof(double)*(maxchunk*9+maxchunk*2+2*3*maxchunk);
+  double bytes = sizeof(double)*(3*2+maxchunk*2+2*3*maxchunk);
   return bytes;
 }
