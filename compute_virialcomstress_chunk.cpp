@@ -327,7 +327,7 @@ void ComputeVirialcomstressChunk::compute_array()
           }
 
           //Rewrap the vector, so there are no discontinuities when molecules cross boundaries
-          domain->remap(delcom);
+          domain->minimum_image_big(delcom);
 
           //Reminder: delx * fpair is the interatomic force and dx is the intermolecular distance
           stress[i_index][0] += delx*fpair*delcom[0]*scale; //Txx
