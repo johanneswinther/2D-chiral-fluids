@@ -1,0 +1,238 @@
+#LAMMPS input script for wall benchmark test
+variable    slurmid getenv SLURM_JOB_ID
+shell       mkdir out/${slurmid}
+shell       mkdir out/${slurmid}/restart
+log         out/${slurmid}/loginit.out
+
+#Settings
+variable    restart index 0
+variable    rho equal 0.3                    #Molecule density
+variable    rho_wall equal 0.6                #Wall density
+variable    gamma equal 2
+variable    gammainv equal 1/${gamma}
+variable    T equal 1.0                       # Temperature (energy units)
+variable    dt equal 0.002                    # Time step should be small enough to resolve correlation functions
+variable    sigma_d equal 1.1224620483
+variable    rcut equal ${sigma_d}
+variable    rcomm equal ${sigma_d}
+variable    pi equal 3.14159265
+variable    total_run_time equal 900000000
+variable    s equal 10       # Nevery
+variable    p equal 100000       # Nrepeat
+variable    d equal 1000000     # Nfreq
+
+# Problem setup
+units       lj
+dimension   2
+atom_style  full
+neigh_modify    delay 0 every 1
+newton          on off
+comm_modify     vel yes cutoff ${rcomm}   # normally 2.5
+
+variable    Lp equal 1000.0#/sqrt(1/${rho})  #length
+variable    Wp equal 100.0#/sqrt(1/${rho})   #width
+variable    Lm equal -1000.0#/sqrt(1/${rho})  #length
+variable    Wm equal -100.0#/sqrt(1/${rho})   #width
+region          simbox block ${Wm} ${Wp} ${Lm} ${Lp} -0.1 0.1 units box
+
+create_box      2 simbox
+
+mass            * 1.0
+
+# Set up wall lattice using rho_wall
+variable wall_thickness equal 16.0
+
+# Define wall boundaries in wall lattice units (arithmetic expression enclosed in quotes)
+variable x_l_wall equal "-1.0*v_wall_thickness"
+variable x_h_wall equal "v_wall_thickness"
+variable y_l_wall equal "v_Lm"
+variable y_h_wall equal "v_Lp"
+
+# Rescale wall boundaries.
+variable x_l_wall_rescaled equal "v_x_l_wall"
+variable x_h_wall_rescaled equal "v_x_h_wall"
+variable y_l_wall_rescaled equal "v_y_l_wall"
+variable y_h_wall_rescaled equal "v_y_h_wall"
+
+# Create the wall region
+region wallblockL block ${x_l_wall_rescaled} 0 ${y_l_wall_rescaled} ${y_h_wall_rescaled} -0.1 0.1 units box
+region wallblockR block 0 ${x_h_wall_rescaled} ${y_l_wall_rescaled} ${y_h_wall_rescaled} -0.1 0.1 units box
+
+
+lattice sq ${rho_wall}
+create_atoms 2 region wallblockL
+create_atoms 2 region wallblockR
+group wallL region wallblockL
+group wallR region wallblockR
+
+#Fix wall atoms
+fix freeze wallL setforce 0 0 0
+velocity wallL set 0 0 0
+fix freeze wallR setforce 0 0 0
+velocity wallR set 0 0 0
+
+#Give some extra skin
+variable skin equal 3.0
+variable ylo   equal v_Lm+v_skin
+variable yhi   equal v_Lp-v_skin
+variable xlo   equal v_x_l_wall_rescaled-v_skin
+variable xhi   equal v_x_h_wall_rescaled+v_skin
+variable Wm_extra equal v_Wm+v_skin
+variable Wp_extra equal v_Wp-v_skin
+
+#Create molecules in box on left side of wall
+region left_part block ${Wm_extra} ${xlo} ${ylo} ${yhi} -0.1 0.1 units box
+
+#Create molecules in box on right side of wall
+region right_part block ${xhi} ${Wp_extra} ${ylo} ${yhi} -0.1 0.1 units box
+
+
+#Fuse them together
+region fluid union 2 left_part right_part
+
+#Create fluid
+lattice sq ${rho}
+
+molecule        bead molecules/bead_molecule.txt
+create_atoms 0 region fluid mol bead 323324
+
+#Group
+group not_wall_atoms type 1
+
+# Define interactions
+pair_style      lj/cut ${rcut}
+pair_coeff      * * 1 1
+pair_modify     shift yes #Make it WCA potential
+
+# Define fixes that affect dynamics
+fix 1 not_wall_atoms nvt temp $T $T 100.0
+fix             3 not_wall_atoms langevin $T $T ${gammainv} 323324
+compute         thermal not_wall_atoms temp/partial 1 1 0
+fix_modify      3 temp thermal                             # Impose bath interactions in both x and y
+fix             mom all momentum 10000 linear 1 1 0        # Remove center of mass velocity every N timestep                         #add sinusoidally varying force in x-direction
+fix             2d all enforce2d
+
+# Write out the simulation parameters for post-processing:
+variable        ly equal ly
+variable        lx equal lx
+print           '{'                                                   file   out/${slurmid}/params.json
+print           '   "lx": ${lx},'                                     append out/${slurmid}/params.json
+print           '   "ly": ${ly},'                                     append out/${slurmid}/params.json
+print           '   "rho": ${rho},'                                   append out/${slurmid}/params.json
+print           '   "rcut": ${rcut},'                                 append out/${slurmid}/params.json
+print           '   "dt": ${dt},'                                     append out/${slurmid}/params.json
+print           '   "s": ${s},'                                       append out/${slurmid}/params.json
+print           '   "p": ${p},'                                       append out/${slurmid}/params.json
+print           '   "d": ${d},'                                       append out/${slurmid}/params.json
+print           '   "total_run_time": ${total_run_time}'              append out/${slurmid}/params.json
+print           '}'                                                   append out/${slurmid}/params.json
+
+write_dump all xyz out/${slurmid}/init.xyz
+
+# Filesystem operations
+if "${restart} == 1" then &
+    "clear" &
+    "read_restart    restart/tmp.restart.*"
+
+# Equilibration run
+if "${restart} == 1" then &
+    "jump SELF production_run"
+
+minimize        1.0e-6 1.0e-8 10000 10000
+velocity        all create $T 323324
+thermo          1000
+thermo_style    custom step temp press cpu spcpu
+timestep        0.002
+run             10000
+timestep        0.005
+run             100000
+
+unfix 3       #Turn off Langevin thermostat after getting the right temperature
+
+# Production run: Compute wall forces and stress
+label           production_run
+log             out/${slurmid}/log.out
+timestep        ${dt}
+
+#--- Molecule Chunks ---
+compute MolVirial   not_wall_atoms chunk/atom molecule
+compute MolKinetic  not_wall_atoms chunk/atom molecule
+
+variable wall_area equal (v_wall_thickness*2+1)*ly #+1 to account for atom radius 0.5 on both sides of wall
+variable scale equal vol/(vol-v_wall_area)
+
+# Compute Kinetic COM Stress
+
+compute kineticCOMStress not_wall_atoms kineticcomstresssum/chunk MolKinetic
+
+variable kineticCOMStressXX equal c_kineticCOMStress[1]*v_scale
+variable kineticCOMStressXY equal c_kineticCOMStress[2]*v_scale
+variable kineticCOMStressYX equal c_kineticCOMStress[4]*v_scale
+variable kineticCOMStressYY equal c_kineticCOMStress[5]*v_scale
+
+# Compute Virial COM Stress
+
+compute virialCOMStress not_wall_atoms virialcomstresssum/chunk MolVirial
+
+variable virialCOMStressXX equal c_virialCOMStress[1]*v_scale
+variable virialCOMStressXY equal c_virialCOMStress[2]*v_scale
+variable virialCOMStressYX equal c_virialCOMStress[4]*v_scale
+variable virialCOMStressYY equal c_virialCOMStress[5]*v_scale
+
+#--- Bead (Pressure) Stress Computations ---
+# Kinetic Stress
+compute vperatom all stress/atom NULL virial
+compute vpxx not_wall_atoms reduce sum c_vperatom[1]
+compute vpyy not_wall_atoms reduce sum c_vperatom[2]
+compute vpxy not_wall_atoms reduce sum c_vperatom[4]
+variable vpxx_val equal "c_vpxx / vol"
+variable vpyy_val equal "c_vpyy / vol"
+variable vpxy_val equal "c_vpxy / vol"
+
+# Virial Stress
+compute kperatom all stress/atom NULL ke
+compute kpxx not_wall_atoms reduce sum c_kperatom[1]
+compute kpyy not_wall_atoms reduce sum c_kperatom[2]
+compute kpxy not_wall_atoms reduce sum c_kperatom[4]
+variable kpxx_val equal "c_kpxx / vol"
+variable kpyy_val equal "c_kpyy / vol"
+variable kpxy_val equal "c_kpxy / vol"
+
+#--- Stress Sum Outputs ---
+# Sum COM stresses over time
+fix sumKineticCOMStress not_wall_atoms ave/time $s $p $d v_kineticCOMStressXX v_kineticCOMStressXY v_kineticCOMStressYX v_kineticCOMStressYY &
+       file out/${slurmid}/kineticCOMStressSum.out
+
+fix sumVirialCOMStress not_wall_atoms ave/time $s $p $d v_virialCOMStressXX v_virialCOMStressXY v_virialCOMStressYX v_virialCOMStressYY &
+       file out/${slurmid}/virialCOMStressSum.out
+
+# Sum Bead stresses over time
+fix sumKineticBeadStressPerAtom all ave/time $s $p $d v_kpxx_val v_kpxy_val v_kpxy_val v_kpyy_val &
+       file out/${slurmid}/kineticBeadStressSumPerAtom.out
+
+fix sumVirialBeadStressPerAtom all ave/time $s $p $d v_vpxx_val v_vpxy_val v_vpxy_val v_vpyy_val &
+       file out/${slurmid}/virialBeadStressSumPerAtom.out
+
+#Compute interactions between wall and fluid
+compute interForceL wallL group/group not_wall_atoms
+compute interForceR wallR group/group not_wall_atoms
+
+#Extract the x,y,z components from each
+variable FxL equal c_interForceL[1]
+variable FyL equal c_interForceL[2]
+variable FzL equal c_interForceL[3]
+variable FxR equal c_interForceR[1]
+variable FyR equal c_interForceR[2]
+variable FzR equal c_interForceR[3]
+
+fix avgForces all ave/time $s $p $d v_FxL v_FyL v_FzL v_FxR v_FyR v_FzR file out/${slurmid}/forces_ave.out
+
+#--- Dumping ---
+
+dump traj all custom $d out/${slurmid}/trajall.xyz id type x y z vx vy vz mass
+
+
+restart         $d out/${slurmid}/restart/tmp.restart
+thermo_style custom step temp press cpu spcpu
+thermo          ${d}
+run             ${total_run_time} #upto
