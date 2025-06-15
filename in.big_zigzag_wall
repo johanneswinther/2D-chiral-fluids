@@ -198,18 +198,18 @@ compute vperatom all stress/atom NULL virial
 compute vpxx not_wall_atoms reduce sum c_vperatom[1]
 compute vpyy not_wall_atoms reduce sum c_vperatom[2]
 compute vpxy not_wall_atoms reduce sum c_vperatom[4]
-variable vpxx_val equal "c_vpxx / vol"
-variable vpyy_val equal "c_vpyy / vol"
-variable vpxy_val equal "c_vpxy / vol"
+variable vpxx_val equal "c_vpxx / vol*v_scale"
+variable vpyy_val equal "c_vpyy / vol*v_scale"
+variable vpxy_val equal "c_vpxy / vol*v_scale"
 
 # Virial Stress
 compute kperatom all stress/atom NULL ke
 compute kpxx not_wall_atoms reduce sum c_kperatom[1]
 compute kpyy not_wall_atoms reduce sum c_kperatom[2]
 compute kpxy not_wall_atoms reduce sum c_kperatom[4]
-variable kpxx_val equal "c_kpxx / vol"
-variable kpyy_val equal "c_kpyy / vol"
-variable kpxy_val equal "c_kpxy / vol"
+variable kpxx_val equal "c_kpxx / vol*v_scale"
+variable kpyy_val equal "c_kpyy / vol*v_scale"
+variable kpxy_val equal "c_kpxy / vol*v_scale"
 
 #--- Stress Sum Outputs ---
 # Sum COM stresses over time
