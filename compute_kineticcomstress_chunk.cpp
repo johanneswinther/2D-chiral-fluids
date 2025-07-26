@@ -13,7 +13,7 @@
    This file is part of custom LAMMPS code for simulations of chiral matter.
     author: Johannes Winther
     e-mail: johannesiwk@gmail.com
-    github: https://github.com/mandadapu-group/2D-chiral-fluids
+    github: https://github.com/johanneswinther/2D-chiral-fluids
 ------------------------------------------------------------------------- */
 
 #include "domain.h"
