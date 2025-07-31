@@ -18,46 +18,30 @@
 
 #ifdef COMPUTE_CLASS
 
-ComputeStyle(kineticcomstress/chunk,ComputeKineticcomstressChunk)
+ComputeStyle(kineticcomstress2dsum/chunk,ComputeKineticcomstress2DSumChunk)
 
 #else
 
-#ifndef LMP_COMPUTE_KINETICCOMSTRESS_CHUNK_H
-#define LMP_COMPUTE_KINETICCOMSTRESS_CHUNK_H
+#ifndef LMP_COMPUTE_KINETICCOMSTRESS_2DSUM_CHUNK_H
+#define LMP_COMPUTE_KINETICCOMSTRESS_2DSUM_CHUNK_H
 
 #include "compute_chunk.h"
 
 namespace LAMMPS_NS {
 
-class ComputeKineticcomstressChunk : public ComputeChunk {
+class ComputeKineticcomstress2DSumChunk : public ComputeChunk {
  public:
-  ComputeKineticcomstressChunk(class LAMMPS *, int, char **);
-  ~ComputeKineticcomstressChunk() override;
+  ComputeKineticcomstress2DSumChunk(class LAMMPS *, int, char **);
+  ~ComputeKineticcomstress2DSumChunk() override;
 
 
   void setup() override;
-  void init() override;
-  void compute_array() override;
+  void compute_vector() override;
   double memory_usage() override;
-
-  // void remove_bias(int, double *) override;
-  // void remove_bias_all() override;
-  // void restore_bias(int, double *) override;
-  // void restore_bias_all() override;
-
-  private:
-    ComputeChunk *tempchunk;
-    int comflag, biasflag;
-    int nvalues;
-    int *which;
-    double adof, cdof;
-    char *id_bias;
-    class Compute *tbias;    // ptr to additional bias compute
-    bigint comstep;
 
  public:
   int keflag,pairflag,bondflag,angleflag,dihedralflag,improperflag;
-  int kspaceflag,fixflag,perchunk_flag,presschunkflag,timeflag;
+  int kspaceflag,fixflag,biasflag,perchunk_flag,presschunkflag,timeflag;
   int size_perchunk_cols,invoked_perchunk,nchunk_local;
   double inv_volume;
   Compute *temperature;
@@ -66,7 +50,9 @@ class ComputeKineticcomstressChunk : public ComputeChunk {
   int nmax;
  private:
   double *massproc, *masstotal;
-  double **vcm, **vcmall, **stress;
+  double **vcm, **vcmall, *stress, *stress_all;
+  double *stress_comp;    // for stress[] Kahan compensation
+  double **vcm_comp;      // for vcm[][] Kahan compensation
 
   void allocate() override;
 };

@@ -13,7 +13,7 @@
    This file is part of custom LAMMPS code for simulations of chiral matter.
     author: Johannes Winther
     e-mail: johannesiwk@gmail.com
-    github: https://github.com/johanneswinther/2D-chiral-fluids
+    github: https://github.com/mandadapu-group/2D-chiral-fluids
 ------------------------------------------------------------------------- */
 
 #include "domain.h"
@@ -34,11 +34,13 @@
 #include "error.h"
 #include "compute_chunk_atom.h"
 #include "compute_property_atom.h"
+#include "compute_temp_profile.h"
+#include "compute_temp_chunk.h"
 #include <array>  // Required for std::array
 
 using namespace LAMMPS_NS;
 
-enum { ONCE, NFREQ, EVERY };
+enum { ONCE, NFREQ, EVERY, NOBIAS, BIAS };
 
 /* ----------------------------------------------------------------------
 
@@ -49,18 +51,31 @@ grained stress tensor for a 2D/3D system of molecules.
 
 ComputeKineticcomstressChunk::ComputeKineticcomstressChunk(LAMMPS *lmp, int narg, char **arg) :
   ComputeChunk(lmp, narg, arg),
-  id_temp(NULL), stress(nullptr), massproc(nullptr), masstotal(nullptr), vcm(nullptr), vcmall(nullptr)
+  id_temp(NULL), id_bias(nullptr),stress(nullptr), massproc(nullptr), masstotal(nullptr), vcm(nullptr), vcmall(nullptr)
 {
-  if (narg < 4) error->all(FLERR,"Illegal compute kineticcomstress/chunk command");
 
   array_flag = 1;
   size_array_cols = 9;
   size_array_rows = 0;
   size_array_rows_variable = 1;
   extarray = 0;
+  biasflag = 0;
+  id_bias = nullptr;
+
+  if (strcmp(arg[4], "NULL") == 0)
+    id_temp = nullptr;
+  else {
+    id_temp = utils::strdup(arg[4]);
+    auto icompute = modify->get_compute_by_id(id_temp);
+    if (!icompute)
+      error->all(FLERR, "Could not find compute kineticcomstress/chunk temperature compute {}", id_temp);
+    if (icompute->tempflag == 0)
+      error->all(FLERR, "Compute kineticcomstress/chunk compute {} does not compute temperature", id_temp);
+  }
 
   ComputeKineticcomstressChunk::init();
   ComputeKineticcomstressChunk::allocate();
+
 }
 
 /* ---------------------------------------------------------------------- */
@@ -112,15 +127,35 @@ void ComputeKineticcomstressChunk::setup()
   }
 }
 
+void ComputeKineticcomstressChunk::init()
+{
+  if (id_temp) {
+    temperature = modify->get_compute_by_id(id_temp);
+    if (!temperature)
+      error->all(FLERR, "Could not find compute kineticcomstress/chunk temperature compute {}", id_temp);
+    if (temperature->tempbias)
+      biasflag = BIAS;
+    else
+      biasflag = NOBIAS;
+  } else
+    biasflag = NOBIAS;
+  
+}
+
 /* ---------------------------------------------------------------------- */
 
 void ComputeKineticcomstressChunk::compute_array()
 {
   int index;
   double massone;
-
+  invoked_scalar = update->ntimestep;
   ComputeChunk::compute_array();
   int *ichunk = cchunk->ichunk;
+
+  if (biasflag) {
+    if (tbias->invoked_scalar != update->ntimestep) tbias->compute_scalar();
+    tbias->remove_bias_all();
+  }
 
   for (int i = 0; i < nchunk; i++) {
     stress[i][0]=0.0;
@@ -159,23 +194,41 @@ void ComputeKineticcomstressChunk::compute_array()
 
   // Compute VCM for each chunk on this processor
   // This piece of code below is adapted from "compute_vcm_chunk.cpp"
-  if (massneed)
-    for (int i = 0; i < nchunk; i++) massproc[i] = 0.0;
-  for (int i = 0; i < nlocal; i++)
-    if (mask[i] & groupbit) {
-      index = ichunk[i] - 1;
-      if (index < 0) continue;
-      if (rmass)
-        massone = rmass[i];
-      else
-        massone = mass[type[i]];
-      // temperature->remove_bias(i, v[i]); //remove macroscopic velocity bias
-      vcm[index][0] += v[i][0] * massone;
-      vcm[index][1] += v[i][1] * massone;
-      vcm[index][2] += v[i][2] * massone;
-      // temperature->restore_bias(i, v[i]); //restore macroscopic velocity bias
-      if (massneed) massproc[index] += massone;
-    }
+  if (biasflag == NOBIAS) {
+    if (massneed)
+      for (int i = 0; i < nchunk; i++) massproc[i] = 0.0;
+    for (int i = 0; i < nlocal; i++)
+      if (mask[i] & groupbit) {
+        index = ichunk[i] - 1;
+        if (index < 0) continue;
+        if (rmass)
+          massone = rmass[i];
+        else
+          massone = mass[type[i]];
+        vcm[index][0] += v[i][0] * massone;
+        vcm[index][1] += v[i][1] * massone;
+        vcm[index][2] += v[i][2] * massone;
+        if (massneed) massproc[index] += massone;
+      }
+  } else {
+    if (massneed)
+      for (int i = 0; i < nchunk; i++) massproc[i] = 0.0;
+    for (int i = 0; i < nlocal; i++)
+      if (mask[i] & groupbit) {
+        index = ichunk[i] - 1;
+        if (index < 0) continue;
+        if (rmass)
+          massone = rmass[i];
+        else
+          massone = mass[type[i]];
+        temperature->remove_bias(i, v[i]); //remove macroscopic velocity bias
+        vcm[index][0] += v[i][0] * massone;
+        vcm[index][1] += v[i][1] * massone;
+        vcm[index][2] += v[i][2] * massone;
+        temperature->restore_bias(i, v[i]); //restore macroscopic velocity bias
+        if (massneed) massproc[index] += massone;
+      }
+  }
   //This piece of code above is adapted from "compute_vcm_chunk.cpp"
 
   
@@ -220,6 +273,8 @@ void ComputeKineticcomstressChunk::compute_array()
       stress[i][0] = stress[i][1] = stress[i][2] = stress[i][3] = stress[i][4] = stress[i][5] = stress[i][6] = stress[i][7] = stress[i][8]= 0.0;
   }
   size_array_rows = nchunk;
+
+  if (biasflag) tbias->restore_bias_all();
 }
 
 double ComputeKineticcomstressChunk::memory_usage()

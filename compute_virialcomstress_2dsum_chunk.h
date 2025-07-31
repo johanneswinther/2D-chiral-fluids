@@ -18,55 +18,44 @@
 
 #ifdef COMPUTE_CLASS
 
-ComputeStyle(kineticcomstress/chunk,ComputeKineticcomstressChunk)
+ComputeStyle(virialcomstress2dsum/chunk,ComputeVirialcomstress2DSumChunk)
 
 #else
 
-#ifndef LMP_COMPUTE_KINETICCOMSTRESS_CHUNK_H
-#define LMP_COMPUTE_KINETICCOMSTRESS_CHUNK_H
+#ifndef LMP_COMPUTE_VIRIALCOMSTRESS_2DSUM_CHUNK_H
+#define LMP_COMPUTE_VIRIALCOMSTRESS_2DSUM_CHUNK_H
 
 #include "compute_chunk.h"
 
 namespace LAMMPS_NS {
 
-class ComputeKineticcomstressChunk : public ComputeChunk {
+class ComputeVirialcomstress2DSumChunk : public ComputeChunk {
  public:
-  ComputeKineticcomstressChunk(class LAMMPS *, int, char **);
-  ~ComputeKineticcomstressChunk() override;
-
+  ComputeVirialcomstress2DSumChunk(class LAMMPS *, int, char **);
+  ~ComputeVirialcomstress2DSumChunk() override;
 
   void setup() override;
-  void init() override;
-  void compute_array() override;
+  void compute_vector() override;
   double memory_usage() override;
-
-  // void remove_bias(int, double *) override;
-  // void remove_bias_all() override;
-  // void restore_bias(int, double *) override;
-  // void restore_bias_all() override;
-
-  private:
-    ComputeChunk *tempchunk;
-    int comflag, biasflag;
-    int nvalues;
-    int *which;
-    double adof, cdof;
-    char *id_bias;
-    class Compute *tbias;    // ptr to additional bias compute
-    bigint comstep;
+  void init_list(int, class NeighList *);
+  void init();
 
  public:
   int keflag,pairflag,bondflag,angleflag,dihedralflag,improperflag;
-  int kspaceflag,fixflag,perchunk_flag,presschunkflag,timeflag;
+  int kspaceflag,fixflag,biasflag,perchunk_flag,presschunkflag,timeflag;
   int size_perchunk_cols,invoked_perchunk,nchunk_local;
-  double inv_volume;
   Compute *temperature;
   char *id_temp;
 
   int nmax;
  private:
+  class NeighList *list;  // Store neighbor list pointer
   double *massproc, *masstotal;
-  double **vcm, **vcmall, **stress;
+  double *stress,*stress_all;
+  double *stress_comp;
+  double **xcm, **xcm_all;
+  double inv_volume,nktv2p, scale;
+  int neighbor_request_id;
 
   void allocate() override;
 };
