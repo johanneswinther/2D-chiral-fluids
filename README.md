@@ -2,7 +2,7 @@
 
 # 2D-chiral-fluids
 
-This repository includes LAMMPS computes for finding the center-of-mass coarse-grained kinetic and virial stress for molecules, including the spin "temperature" and translational "temperature" on a molecular level.
+This repository includes LAMMPS simulation scripts for finding transport coefficients of 2D chiral fluid, using both NEMD's and Green-Kubo computations. As a part of this, there are included some custom LAMMPS computes for finding the center-of-mass coarse-grained kinetic and virial stress for molecules, including the spin "temperature" and translational "temperature" on a molecular level, and a fix to torque the chiral molecules.
 
 Some notes on the stress computes:
 
